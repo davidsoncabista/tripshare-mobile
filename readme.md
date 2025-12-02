@@ -21,8 +21,8 @@ Este é o cliente mobile do ecossistema **TripShare**. Ele se conecta ao backend
 
 ## 🖥️ Painel de Controle (Web)
 
-![Painel de Controle](docs/tripshared-web.PNG)
-![CLI](docs/tripshare-api-proxmox.PNG)
+![Painel de Controle](docs/screenshots/tripshared-web.PNG)
+![CLI](docs/screenshots/tripshare-api-proxmox.PNG)
 
 
 ---
