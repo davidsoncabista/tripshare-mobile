@@ -35,45 +35,47 @@ export default function App() {
 
   // Função chamada quando o usuário escolhe um endereço na lista
   const lidarComSelecaoDestino = async (item) => {
-    Keyboard.dismiss(); // Esconde o teclado
+    Keyboard.dismiss();
     setDestino({ latitude: parseFloat(item.lat), longitude: parseFloat(item.lon) });
     setLoading(true);
-    setStatus("Calculando rota...");
+    setStatus("Conectando ao satélite..."); // Mensagem mais legal
 
     try {
-      // Chama sua API Backend
+      console.log("📤 Enviando pedido para API...");
+      
       const response = await axios.post(`${API_URL}/api/solicitar-corrida`, {
         id_passageiro: PASSAGEIRO_ID_FIXO,
-        origem: `${origem.longitude},${origem.latitude}`, // OSRM usa Lon,Lat
+        origem: `${origem.longitude},${origem.latitude}`,
         destino: `${item.lon},${item.lat}`
       });
 
-      const dados = response.data; // Resposta da API
+      // --- O PULO DO GATO (DEBUG) ---
+      console.log("📥 Resposta da API:", response.data); 
+      // Olhe no terminal do computador o que aparece aqui!
+
+      const dados = response.data;
 
       if (dados.sucesso) {
-        setDadosCorrida(dados); // Guarda preço e info
-        setStatus(`Aguardando Motoboy...`);
+        // Garantia: Se valor vier vazio, mostramos 0.00
+        const precoFinal = dados.valor || dados.financeiro?.preco_total || 0.00;
+        
+        // Atualizamos o estado com o valor corrigido
+        setDadosCorrida({ ...dados, valor: precoFinal }); 
+        
+        setStatus(`Procurando motoristas...`);
 
-        // Desenha a rota se o backend mandou a geometria
-        // A API manda via Socket, mas vamos adaptar para pegar do response HTTP no futuro
-        // Por enquanto, vamos desenhar uma linha reta ou esperar o socket desenhar
-        // (Nota: Para desenhar a linha exata aqui, precisamos que a API devolva a geometria no POST tbm,
-        //  hoje ela devolve no socket 'alerta_corrida'. Vamos simplificar e focar no pedido).
-        
-        Alert.alert("Sucesso!", `Corrida solicitada!\nValor: R$ ${dados.valor}`);
-        
-        // Ajusta o zoom do mapa para mostrar origem e destino
+        // Ajusta zoom
         if(mapRef.current) {
             mapRef.current.fitToCoordinates([origem, { latitude: parseFloat(item.lat), longitude: parseFloat(item.lon) }], {
-                edgePadding: { top: 100, right: 50, bottom: 50, left: 50 },
+                edgePadding: { top: 100, right: 50, bottom: 200, left: 50 }, // Mais espaço embaixo p/ card
                 animated: true,
             });
         }
       }
     } catch (error) {
-      console.log(error);
-      Alert.alert("Erro", "Falha ao solicitar corrida.");
-      setStatus("Tente novamente");
+      console.log("❌ Erro no App:", error);
+      Alert.alert("Erro", "Não foi possível calcular a corrida. O servidor respondeu?");
+      setStatus("Erro de conexão");
     } finally {
       setLoading(false);
     }
