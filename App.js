@@ -1,24 +1,27 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { StyleSheet, Text, View, Alert, TouchableOpacity, Keyboard, ActivityIndicator } from 'react-native';
+import { StyleSheet, Text, View, Alert, TouchableOpacity, Keyboard, ActivityIndicator, Vibration } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { io } from "socket.io-client";
 import axios from 'axios';
 
-// Importa seu componente novo
+// Importa seu componente de busca
 import BuscaEndereco from './components/BuscaEndereco'; 
 
 // --- CONFIGURAÇÃO ---
-const API_URL = 'https://core.davidson.dev.br'; // Seu Gateway
-const PASSAGEIRO_ID_FIXO = 1; // Por enquanto fixo, depois vem do Login
+// Se estiver no emulador Android, use 'http://10.0.2.2:3000'
+// Se estiver no celular físico, use seu domínio HTTPS ou IP da rede
+const API_URL = 'https://core.davidson.dev.br'; 
+const PASSAGEIRO_ID_FIXO = 1; 
+const MOTORISTA_ID_FIXO = 999; // ID fake para testar o aceite
 
 export default function App() {
-  const mapRef = useRef(null); // Para controlar o zoom do mapa
+  const mapRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Onde vamos hoje?");
   const [rota, setRota] = useState([]); 
   const [dadosCorrida, setDadosCorrida] = useState(null);
 
-  // Posição Inicial (Fixo no Ver-o-Peso para teste, depois usaremos GPS real)
+  // Posição Inicial (Ver-o-Peso, Belém)
   const [origem] = useState({
     latitude: -1.455,
     longitude: -48.49,
@@ -26,55 +29,119 @@ export default function App() {
 
   const [destino, setDestino] = useState(null);
 
+  // --- FUNÇÃO DO MOTORISTA: ACEITAR CORRIDA ---
+  const aceitarCorrida = async (idCorrida) => {
+    try {
+        setLoading(true);
+        console.log(`Tentando aceitar corrida #${idCorrida}...`);
+        
+        const response = await axios.post(`${API_URL}/api/aceitar-corrida`, {
+            id_corrida: idCorrida,
+            id_motorista: MOTORISTA_ID_FIXO
+        });
+
+        if (response.data.sucesso) {
+            Vibration.cancel();
+            Alert.alert("🎉 Sucesso!", "Você pegou a corrida! Dirija-se ao passageiro.");
+            setStatus("🚘 Em rota (Corrida Aceita)");
+            // Aqui você poderia mudar a tela para o modo navegação
+        }
+    } catch (error) {
+        console.log(error);
+        Alert.alert("Ops!", "Alguém pegou essa corrida antes de você.");
+        Vibration.cancel();
+    } finally {
+        setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    // Conecta no Socket para ouvir atualizações (ex: Motoboy aceitou)
     const socket = io(API_URL);
-    socket.on("connect", () => console.log("Socket conectado"));
+
+    socket.on("connect", () => {
+        console.log("✅ Socket Conectado! ID:", socket.id);
+        // Entra na sala de motoristas para poder ouvir os chamados
+        socket.emit("entrar_como_motorista", { id_motorista: MOTORISTA_ID_FIXO });
+    });
+
+    // --- ESCUTAR NOVAS CORRIDAS (LADO DO MOTORISTA) ---
+    socket.on("alerta_corrida", (dados) => {
+        console.log("🚨 NOVA CORRIDA RECEBIDA:", dados);
+        
+        // 1. Vibrar o celular (Padrão: Vibra-Para-Vibra)
+        Vibration.vibrate([500, 500, 500]);
+
+        // 2. Converter o GeoJSON da rota para o formato do Mapa
+        if (dados.geometria && dados.geometria.coordinates) {
+            const pontos = dados.geometria.coordinates.map(coord => ({
+                latitude: coord[1],
+                longitude: coord[0]
+            }));
+            setRota(pontos);
+        }
+
+        // 3. Mostrar Alerta na Tela
+        Alert.alert(
+            "🔥 NOVA CORRIDA DISPONÍVEL!",
+            `Ganhe: R$ ${parseFloat(dados.valor).toFixed(2)}\nDistância: ${dados.distancia}\nTempo: ${dados.tempo}`,
+            [
+                { 
+                    text: "Rejeitar", 
+                    style: "cancel", 
+                    onPress: () => Vibration.cancel() 
+                },
+                { 
+                    text: "ACEITAR AGORA", 
+                    onPress: () => aceitarCorrida(dados.id_corrida) 
+                }
+            ]
+        );
+    });
+
+    // Escutar atualizações de status (ex: quando alguém aceita)
+    socket.on("status_corrida", (dados) => {
+        if (dados.status === 'em_andamento') {
+            setStatus(`Motorista a caminho! (ID: ${dados.id_motorista})`);
+        }
+    });
+
     return () => socket.disconnect();
   }, []);
 
-  // Função chamada quando o usuário escolhe um endereço na lista
+  // --- FUNÇÃO DO PASSAGEIRO: PEDIR CORRIDA ---
   const lidarComSelecaoDestino = async (item) => {
     Keyboard.dismiss();
     setDestino({ latitude: parseFloat(item.lat), longitude: parseFloat(item.lon) });
     setLoading(true);
-    setStatus("Conectando ao satélite..."); // Mensagem mais legal
+    setStatus("Conectando ao satélite...");
 
     try {
-      console.log("📤 Enviando pedido para API...");
-      
       const response = await axios.post(`${API_URL}/api/solicitar-corrida`, {
         id_passageiro: PASSAGEIRO_ID_FIXO,
         origem: `${origem.longitude},${origem.latitude}`,
         destino: `${item.lon},${item.lat}`
       });
 
-      // --- O PULO DO GATO (DEBUG) ---
-      console.log("📥 Resposta da API:", response.data); 
-      // Olhe no terminal do computador o que aparece aqui!
-
       const dados = response.data;
 
       if (dados.sucesso) {
-        // Garantia: Se valor vier vazio, mostramos 0.00
-        const precoFinal = dados.valor || dados.financeiro?.preco_total || 0.00;
+        // Correção para garantir que o preço apareça
+        const precoFinal = dados.valor || 0.00;
         
-        // Atualizamos o estado com o valor corrigido
-        setDadosCorrida({ ...dados, valor: precoFinal }); 
-        
+        setDadosCorrida({ ...dados, valor: precoFinal });
         setStatus(`Procurando motoristas...`);
 
-        // Ajusta zoom
+        // Zoom no mapa
         if(mapRef.current) {
             mapRef.current.fitToCoordinates([origem, { latitude: parseFloat(item.lat), longitude: parseFloat(item.lon) }], {
-                edgePadding: { top: 100, right: 50, bottom: 200, left: 50 }, // Mais espaço embaixo p/ card
+                edgePadding: { top: 100, right: 50, bottom: 200, left: 50 },
                 animated: true,
             });
         }
       }
     } catch (error) {
-      console.log("❌ Erro no App:", error);
-      Alert.alert("Erro", "Não foi possível calcular a corrida. O servidor respondeu?");
+      console.log("Erro:", error);
+      Alert.alert("Erro", "Falha ao solicitar corrida.");
       setStatus("Erro de conexão");
     } finally {
       setLoading(false);
@@ -84,7 +151,6 @@ export default function App() {
   return (
     <View style={styles.container}>
       
-      {/* O Mapa fica no fundo */}
       <MapView 
         ref={mapRef}
         style={styles.map} 
@@ -94,36 +160,39 @@ export default function App() {
           longitudeDelta: 0.05,
         }}
       >
-        {/* Marcador da Origem (Passageiro) */}
         <Marker coordinate={origem} title="Você está aqui" pinColor="blue" />
-
-        {/* Marcador do Destino (Se tiver escolhido) */}
         {destino && <Marker coordinate={destino} title="Destino" pinColor="red" />}
-
-        {/* Linha da Rota (Se tiver) */}
+        
         {rota.length > 0 && (
           <Polyline coordinates={rota} strokeColor="#00ff88" strokeWidth={4} />
         )}
       </MapView>
 
-      {/* Componente de Busca Flutuante */}
       {!dadosCorrida && (
         <View style={styles.buscaContainer}>
             <BuscaEndereco onSelecionar={lidarComSelecaoDestino} />
         </View>
       )}
 
-      {/* Card de Status/Preço (Aparece só depois de pedir) */}
+      {/* Card de Informação */}
       {dadosCorrida && (
         <View style={styles.cardInfo}>
             <Text style={styles.tituloInfo}>Solicitação Enviada</Text>
-            <Text style={styles.preco}>R$ {dadosCorrida.valor}</Text>
+            <Text style={styles.preco}>R$ {parseFloat(dadosCorrida.valor).toFixed(2)}</Text>
             <Text style={styles.status}>{status}</Text>
-            <ActivityIndicator size="small" color="#00ff88" style={{marginTop: 10}} />
+            
+            {status === 'Procurando motoristas...' && (
+                <ActivityIndicator size="small" color="#00ff88" style={{marginTop: 10}} />
+            )}
             
             <TouchableOpacity 
                 style={styles.botaoCancelar} 
-                onPress={() => { setDadosCorrida(null); setDestino(null); setStatus("Onde vamos?"); }}
+                onPress={() => { 
+                    setDadosCorrida(null); 
+                    setDestino(null); 
+                    setRota([]); // Limpa a rota
+                    setStatus("Onde vamos?"); 
+                }}
             >
                 <Text style={{color:'white'}}>Cancelar / Nova Busca</Text>
             </TouchableOpacity>
@@ -138,7 +207,7 @@ const styles = StyleSheet.create({
   map: { width: '100%', height: '100%' },
   buscaContainer: {
     position: 'absolute', top: 0, width: '100%', zIndex: 10,
-    paddingTop: 10 // Espaço para barra de status
+    paddingTop: 40 // Ajuste para não ficar em cima da barra de status
   },
   cardInfo: {
     position: 'absolute', bottom: 30, width: '90%', alignSelf: 'center',
@@ -148,7 +217,7 @@ const styles = StyleSheet.create({
   },
   tituloInfo: { fontSize: 16, color: '#666' },
   preco: { fontSize: 32, fontWeight: 'bold', color: '#333', marginVertical: 5 },
-  status: { color: '#00cc66', fontWeight: 'bold' },
+  status: { color: '#00cc66', fontWeight: 'bold', textAlign: 'center' },
   botaoCancelar: {
     marginTop: 15, backgroundColor: '#ff4444', padding: 10, borderRadius: 8, width: '100%', alignItems: 'center'
   }
