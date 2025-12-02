@@ -6,11 +6,24 @@ Este é o cliente mobile do ecossistema **TripShare**. Ele se conecta ao backend
 
 ---
 
-## 📸 Screenshots
+## 📱 Galeria do App Mobile
 
-| Aguardando | Alerta de Corrida | Rota Desenhada |
-|:---:|:---:|:---:|
-| *(Coloque print aqui)* | *(Coloque print aqui)* | *(Coloque print aqui)* |
+<table>
+  <tr>
+    <td align="center"><b>Rota no Mapa</b></td>
+  </tr>
+  <tr>
+    <td>
+      <img src="docs/screenshots/print-teste-tripshared-mobile.jpg" width="200" />
+    </td>
+  </tr>
+</table>
+
+## 🖥️ Painel de Controle (Web)
+
+![Painel de Controle](docs/tripshared-web.PNG)
+![CLI](docs/tripshare-api-proxmox.PNG)
+
 
 ---
 
