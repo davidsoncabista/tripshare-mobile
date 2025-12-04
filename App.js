@@ -5,13 +5,16 @@ import { io } from "socket.io-client";
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+
 // Importa suas telas e componentes
 import LoginScreen from './screens/LoginScreen';
 import BuscaEndereco from './components/BuscaEndereco';
+import HistoryScreen from './screens/HistoryScreen';
 
 // CONFIGURAÇÃO DO SERVIDOR
 const API_URL = 'https://core.davidson.dev.br';
 const { width } = Dimensions.get('window');
+const [telaAtual, setTelaAtual] = useState('MAPA');
 
 export default function App() {
   // --- ESTADOS ---
@@ -182,7 +185,10 @@ export default function App() {
   if (loadingAuth) return <View style={styles.center}><ActivityIndicator size="large" color="#a388ee"/></View>;
   
   if (!usuario) return <LoginScreen onLoginSuccess={(u) => { setUsuario(u); conectarSocket(u); }} />;
-
+// Se a tela for histórico, mostra ela e esconde o mapa
+  if (telaAtual === 'HISTORICO') {
+      return <HistoryScreen navigation={{ goBack: () => setTelaAtual('MAPA') }} />;
+  }
   return (
     <View style={styles.container}>
       <MapView 
@@ -212,8 +218,13 @@ export default function App() {
         {rota.length > 0 && <Polyline coordinates={rota} strokeColor="#00ff88" strokeWidth={5} />}
       </MapView>
 
-      <View style={styles.header}>
-          <Text style={styles.headerText}>Olá, {usuario.nome}</Text>
+    <View style={styles.header}>
+          <View>
+            <Text style={styles.headerText}>Olá, {usuario.nome}</Text>
+            <TouchableOpacity onPress={() => setTelaAtual('HISTORICO')}>
+                <Text style={{color:'#a388ee', fontWeight:'bold'}}>📜 Histórico</Text>
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity onPress={fazerLogout}><Text style={{color:'red', fontWeight:'bold'}}>SAIR</Text></TouchableOpacity>
       </View>
 
