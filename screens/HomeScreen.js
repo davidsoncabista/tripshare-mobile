@@ -15,12 +15,12 @@ export default function HomeScreen({ navigation, route }) {
   // Pegamos o usuario que veio do App.js via parametros ou storage
   const [usuario, setUsuario] = useState(route.params?.user || null); 
   const [socket, setSocket] = useState(null);
-  
   const mapRef = useRef(null);
   const [status, setStatus] = useState("Conectando...");
   const [rota, setRota] = useState([]); 
   const [dadosCorrida, setDadosCorrida] = useState(null);
-  const [origem] = useState({ latitude: -1.455, longitude: -48.49 });
+  // Se veio GPS real do App.js, usa ele. Se não, usa Ver-o-Peso (Fallback)
+  const [origem] = useState(route.params?.origin || { latitude: -1.455, longitude: -48.49 });
   const [destino, setDestino] = useState(null);
 
   // Carrega usuário se não veio por parametro (Redundância)
