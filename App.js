@@ -1,30 +1,36 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { StyleSheet, Text, View, Alert, TouchableOpacity, ActivityIndicator, Vibration, Dimensions } from 'react-native';
+import { StyleSheet, Text, View, Alert, TouchableOpacity, ActivityIndicator, Vibration, Dimensions, Image } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { io } from "socket.io-client";
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// Importa suas telas e componentes
 import LoginScreen from './screens/LoginScreen';
 import BuscaEndereco from './components/BuscaEndereco';
 
+// CONFIGURAÇÃO DO SERVIDOR
 const API_URL = 'https://core.davidson.dev.br';
-const { width } = Dimensions.get('window'); // Para responsividade
+const { width } = Dimensions.get('window');
 
 export default function App() {
+  // --- ESTADOS ---
   const [usuario, setUsuario] = useState(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
   const mapRef = useRef(null);
   
+  // Estado da Corrida
   const [status, setStatus] = useState("Onde vamos hoje?");
   const [rota, setRota] = useState([]); 
   const [dadosCorrida, setDadosCorrida] = useState(null);
   
-  const [origem] = useState({ latitude: -1.455, longitude: -48.49 });
+  // Mapa
+  const [origem] = useState({ latitude: -1.455, longitude: -48.49 }); // Ver-o-Peso
   const [destino, setDestino] = useState(null);
   
   const [socket, setSocket] = useState(null);
 
+  // 1. VERIFICAR LOGIN SALVO
   useEffect(() => {
     const checkLogin = async () => {
       try {
@@ -41,25 +47,31 @@ export default function App() {
     checkLogin();
   }, []);
 
+  // 2. CONEXÃO SOCKET
   const conectarSocket = (user) => {
     const novoSocket = io(API_URL);
+    
     novoSocket.on("connect", () => {
       console.log(`✅ Socket conectado! User: ${user.nome}`);
       if (user.tipo === 'motorista') {
         novoSocket.emit("entrar_como_motorista", { id_motorista: user.id });
-        setStatus("🟢 Online");
+        setStatus("🟢 Online - Aguardando chamados...");
+      } else {
+        setStatus("Onde vamos hoje?");
       }
     });
+
     configurarEventos(novoSocket, user);
     setSocket(novoSocket);
   };
 
   const configurarEventos = (sock, user) => {
+    // Eventos para o MOTORISTA
     if (user.tipo === 'motorista') {
         sock.on("alerta_corrida", (dados) => {
             Vibration.vibrate([500, 500, 500]);
             
-            // Desenha a rota E GUARDA ELA
+            // Desenha a rota sugerida
             if (dados.geometria?.coordinates) {
                 const pontos = dados.geometria.coordinates.map(c => ({ latitude: c[1], longitude: c[0] }));
                 setRota(pontos);
@@ -67,7 +79,7 @@ export default function App() {
                 // Centraliza o mapa na rota
                 if(mapRef.current) {
                     mapRef.current.fitToCoordinates(pontos, {
-                        edgePadding: { top: 50, right: 50, bottom: 200, left: 50 },
+                        edgePadding: { top: 50, right: 50, bottom: 250, left: 50 },
                         animated: true
                     });
                 }
@@ -75,7 +87,7 @@ export default function App() {
 
             Alert.alert(
                 "🔥 NOVA CORRIDA!",
-                `R$ ${parseFloat(dados.valor).toFixed(2)} - ${dados.distancia}`,
+                `Ganhe: R$ ${parseFloat(dados.valor).toFixed(2)}\nDistância: ${dados.distancia}`,
                 [
                     { text: "Ignorar", style: "cancel", onPress: () => Vibration.cancel() },
                     { text: "ACEITAR", onPress: () => aceitarCorrida(dados, user) }
@@ -84,19 +96,20 @@ export default function App() {
         });
     }
 
+    // Eventos GERAIS (Mudança de status)
     sock.on("status_corrida", (dados) => {
         if (dados.status === 'em_andamento' && user.tipo === 'passageiro') {
             setStatus(`Motorista a caminho!`);
-            Alert.alert("Oba!", "Motorista aceitou!");
+            Alert.alert("Oba!", "Motorista aceitou sua corrida!");
         }
         if (dados.status === 'finalizada') {
-            Alert.alert("Fim de viagem", "Chegamos ao destino!");
+            Alert.alert("Viagem Finalizada", "Chegamos ao destino. Obrigado!");
             resetarEstado();
         }
     });
   };
 
-  // --- AÇÕES ---
+  // --- AÇÕES DO APP ---
 
   const aceitarCorrida = async (dadosDaOferta, user) => {
     try {
@@ -108,11 +121,10 @@ export default function App() {
         if (response.data.sucesso) {
             Vibration.cancel();
             setStatus("🚘 EM CORRIDA");
-            // Mantém os dados na tela
             setDadosCorrida({ ...dadosDaOferta, status: 'em_andamento' });
         }
     } catch (error) {
-        Alert.alert("Erro", "Não foi possível aceitar.");
+        Alert.alert("Erro", "Não foi possível aceitar a corrida.");
     }
   };
 
@@ -126,7 +138,6 @@ export default function App() {
               resetarEstado();
           }
       } catch (error) {
-          console.log(error);
           Alert.alert("Erro", "Falha ao finalizar.");
       }
   };
@@ -134,6 +145,7 @@ export default function App() {
   const solicitarCorrida = async (item) => {
     if (!usuario) return;
     setDestino({ latitude: parseFloat(item.lat), longitude: parseFloat(item.lon) });
+    setStatus("Conectando...");
     
     try {
         const response = await axios.post(`${API_URL}/api/solicitar-corrida`, {
@@ -147,7 +159,7 @@ export default function App() {
             setStatus("Procurando motoristas...");
         }
     } catch (error) {
-        Alert.alert("Erro", "Falha ao pedir.");
+        Alert.alert("Erro", "Falha ao pedir corrida.");
     }
   };
 
@@ -155,7 +167,7 @@ export default function App() {
       setDadosCorrida(null);
       setDestino(null);
       setRota([]);
-      setStatus(usuario.tipo === 'motorista' ? "🟢 Online" : "Onde vamos?");
+      setStatus(usuario.tipo === 'motorista' ? "🟢 Online - Aguardando" : "Onde vamos?");
   };
 
   const fazerLogout = async () => {
@@ -165,7 +177,10 @@ export default function App() {
     if(socket) socket.disconnect();
   };
 
+  // --- RENDERIZAÇÃO (TELAS) ---
+
   if (loadingAuth) return <View style={styles.center}><ActivityIndicator size="large" color="#a388ee"/></View>;
+  
   if (!usuario) return <LoginScreen onLoginSuccess={(u) => { setUsuario(u); conectarSocket(u); }} />;
 
   return (
@@ -175,25 +190,43 @@ export default function App() {
         style={styles.map} 
         initialRegion={{ ...origem, latitudeDelta: 0.05, longitudeDelta: 0.05 }}
       >
-        <Marker coordinate={origem} pinColor="blue" title="Eu" />
-        {destino && <Marker coordinate={destino} pinColor="red" />}
-        {rota.length > 0 && <Polyline coordinates={rota} strokeColor="#00ff88" strokeWidth={4} />}
+        {/* ÍCONE ORIGEM (Bonequinho) */}
+        <Marker coordinate={origem} title="Você" anchor={{x:0.5, y:0.5}}>
+            <Image 
+                source={{uri: 'https://cdn-icons-png.flaticon.com/512/1673/1673221.png'}} 
+                style={{width: 40, height: 40}} resizeMode="contain"
+            />
+        </Marker>
+
+        {/* ÍCONE DESTINO (Bandeira) */}
+        {destino && (
+            <Marker coordinate={destino} title="Destino" anchor={{x:0.5, y:1}}>
+                <Image 
+                    source={{uri: 'https://cdn-icons-png.flaticon.com/512/149/149059.png'}} 
+                    style={{width: 40, height: 40}} resizeMode="contain"
+                />
+            </Marker>
+        )}
+        
+        {/* ROTA (Linha) */}
+        {rota.length > 0 && <Polyline coordinates={rota} strokeColor="#00ff88" strokeWidth={5} />}
       </MapView>
 
       <View style={styles.header}>
           <Text style={styles.headerText}>Olá, {usuario.nome}</Text>
-          <TouchableOpacity onPress={fazerLogout}><Text style={{color:'red'}}>Sair</Text></TouchableOpacity>
+          <TouchableOpacity onPress={fazerLogout}><Text style={{color:'red', fontWeight:'bold'}}>SAIR</Text></TouchableOpacity>
       </View>
 
+      {/* PAINEL PASSAGEIRO */}
       {!dadosCorrida && usuario.tipo === 'passageiro' && (
         <View style={styles.buscaContainer}><BuscaEndereco onSelecionar={solicitarCorrida} /></View>
       )}
 
+      {/* PAINEL DE AÇÃO (Corrida Ativa ou Solicitada) */}
       {dadosCorrida && (
         <View style={[styles.cardInfo, usuario.tipo === 'motorista' ? styles.cardMotorista : {}]}>
-            {/* Título Ajustado */}
             <Text style={styles.tituloInfo}>
-                {usuario.tipo === 'motorista' ? '🚘 CORRIDA ATIVA' : 'Aguardando'}
+                {usuario.tipo === 'motorista' ? '🚘 CORRIDA ATIVA' : 'Solicitação Enviada'}
             </Text>
             
             <Text style={styles.preco}>R$ {parseFloat(dadosCorrida.valor).toFixed(2)}</Text>
@@ -205,7 +238,6 @@ export default function App() {
 
             <Text style={styles.status}>{status}</Text>
             
-            {/* Botão Dinâmico: Cancelar (Passageiro) ou Finalizar (Motorista) */}
             <TouchableOpacity 
                 style={[styles.botao, {backgroundColor: usuario.tipo === 'motorista' ? '#00cc66' : '#ff4444'}]} 
                 onPress={usuario.tipo === 'motorista' ? finalizarCorrida : resetarEstado}
@@ -227,16 +259,11 @@ const styles = StyleSheet.create({
   header: { position: 'absolute', top: 40, left: 20, right: 20, flexDirection:'row', justifyContent:'space-between', zIndex: 20, backgroundColor:'rgba(255,255,255,0.9)', padding:10, borderRadius:8, elevation:5 },
   headerText: { fontWeight:'bold', color:'#333' },
   buscaContainer: { position: 'absolute', top: 100, width: '100%', zIndex: 10 },
-  
-  // Cartão Melhorado
   cardInfo: { position: 'absolute', bottom: 30, width: width * 0.9, alignSelf: 'center', backgroundColor: 'white', padding: 20, borderRadius: 15, elevation: 20, alignItems: 'center', shadowColor: '#000', shadowOffset:{width:0, height:5}, shadowOpacity:0.3, shadowRadius:5 },
   cardMotorista: { backgroundColor: '#1a1a1a', borderWidth: 2, borderColor: '#00ff88' },
-  
-  // Textos Ajustados
   tituloInfo: { fontSize: 16, color: '#888', textTransform:'uppercase', letterSpacing:1, marginBottom: 5, fontWeight: 'bold' },
   preco: { fontSize: 42, fontWeight: 'bold', color: '#333', marginVertical: 5 },
   detalheTexto: { fontSize: 16, color: '#666', fontWeight:'500' },
   status: { color: '#a388ee', fontWeight: 'bold', fontSize:14, marginBottom: 10 },
-  
   botao: { marginTop: 10, paddingVertical: 15, borderRadius: 10, width: '100%', alignItems: 'center', elevation: 3 },
 });
