@@ -1,45 +1,93 @@
+// ========================================================
+// 1. IMPORTAÇÕES
+// ========================================================
 import React, { useEffect, useState, useRef } from 'react';
 import { StyleSheet, Text, View, Alert, TouchableOpacity, ActivityIndicator, Vibration, Dimensions, Image } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { io } from "socket.io-client";
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location'; // <--- IMPORTANTE: Agora usamos aqui
 
 import BuscaEndereco from '../components/BuscaEndereco';
 
 const API_URL = 'https://core.davidson.dev.br';
 const { width } = Dimensions.get('window');
 
-// Recebe 'navigation' e 'route' automaticamente do React Navigation
 export default function HomeScreen({ navigation, route }) {
-  // Pegamos o usuario que veio do App.js via parametros ou storage
+  // ========================================================
+  // 2. ESTADOS E REFERÊNCIAS
+  // ========================================================
   const [usuario, setUsuario] = useState(route.params?.user || null); 
   const [socket, setSocket] = useState(null);
   const mapRef = useRef(null);
+  
+  // Estado da Corrida
   const [status, setStatus] = useState("Conectando...");
   const [rota, setRota] = useState([]); 
   const [dadosCorrida, setDadosCorrida] = useState(null);
-  // Se veio GPS real do App.js, usa ele. Se não, usa Ver-o-Peso (Fallback)
-  const [origem] = useState(route.params?.origin || { latitude: -1.455, longitude: -48.49 });
+  
+  // Localização
+  // Se veio GPS real do App.js, usa ele. Senão, fallback para Belém
+  const [origem, setOrigem] = useState(route.params?.origin || null); // Começa null se não vier do App.js
   const [destino, setDestino] = useState(null);
+  
+  // Rastreamento
+  const locationSubscription = useRef(null); // Para poder cancelar o rastreamento ao sair
 
-  // Carrega usuário se não veio por parametro (Redundância)
+  // ========================================================
+  // 3. INICIALIZAÇÃO E SOCKET
+  // ========================================================
   useEffect(() => {
+      // Carrega usuário
       if(!usuario) {
           AsyncStorage.getItem('user_data').then(json => {
               if(json) {
                   const u = JSON.parse(json);
                   setUsuario(u);
                   conectarSocket(u);
+                  iniciarRastreamento(u);
               }
           });
       } else {
           conectarSocket(usuario);
+          iniciarRastreamento(usuario);
+      }
+
+      // Garante que pegamos a localização inicial se ela estiver null
+      if (!origem) {
+          obterLocalizacaoInicial();
       }
       
-      // Cleanup ao sair da tela
-      return () => { if(socket) socket.disconnect(); }
+      // Cleanup: Desconecta socket e para GPS ao fechar a tela
+      return () => { 
+          if(socket) socket.disconnect(); 
+          if(locationSubscription.current) locationSubscription.current.remove();
+      }
   }, []);
+
+  const obterLocalizacaoInicial = async () => {
+      try {
+          console.log("📡 Solicitando permissão de GPS...");
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          
+          if (status !== 'granted') {
+              Alert.alert('Permissão negada', 'Precisamos do GPS para funcionar. Usando localização padrão.');
+              setOrigem({ latitude: -1.455, longitude: -48.49 }); // Fallback Belém
+              return;
+          }
+
+          console.log("📡 Obtendo posição atual...");
+          const location = await Location.getCurrentPositionAsync({});
+          setOrigem({
+              latitude: location.coords.latitude,
+              longitude: location.coords.longitude
+          });
+      } catch (error) {
+          console.error("Erro GPS:", error);
+          setOrigem({ latitude: -1.455, longitude: -48.49 }); // Fallback
+      }
+  };
 
   const conectarSocket = (user) => {
     const novoSocket = io(API_URL);
@@ -56,6 +104,46 @@ export default function HomeScreen({ navigation, route }) {
     setSocket(novoSocket);
   };
 
+  // ========================================================
+  // 4. LÓGICA DE RASTREAMENTO (NOVIDADE SPRINT 2) 📡
+  // ========================================================
+  const iniciarRastreamento = async (user) => {
+      // Só rastreia se for motorista
+      if (user.tipo !== 'motorista') return;
+
+      console.log("📡 Iniciando rastreamento do motorista...");
+      
+      // Garante permissão antes de iniciar watch
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== 'granted') {
+          const { status: newStatus } = await Location.requestForegroundPermissionsAsync();
+          if (newStatus !== 'granted') return;
+      }
+
+      // Configura o "Vigia" do GPS
+      // Dispara a cada 5 segundos OU a cada 10 metros andados
+      locationSubscription.current = await Location.watchPositionAsync(
+        {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 5000,
+            distanceInterval: 10 
+        },
+        (novaPosicao) => {
+            const { latitude, longitude } = novaPosicao.coords;
+            
+            // 1. Atualiza o mapa localmente (o bonequinho anda)
+            setOrigem({ latitude, longitude });
+
+            // 2. Envia para o Servidor (Socket)
+            console.log(`📍 Enviando posição: ${latitude}, ${longitude}`);
+            // EM BREVE: socket.emit('atualizar_posicao', { lat: latitude, lon: longitude });
+        }
+      );
+  };
+
+  // ========================================================
+  // 5. EVENTOS DO SOCKET (ESCUTA)
+  // ========================================================
   const configurarEventos = (sock, user) => {
     if (user.tipo === 'motorista') {
         sock.on("alerta_corrida", (dados) => {
@@ -83,6 +171,9 @@ export default function HomeScreen({ navigation, route }) {
     });
   };
 
+  // ========================================================
+  // 6. AÇÕES DO APP (ACEITAR, FINALIZAR, PEDIR)
+  // ========================================================
   const aceitarCorrida = async (dadosDaOferta, user) => {
     try {
         const response = await axios.post(`${API_URL}/api/aceitar-corrida`, { id_corrida: dadosDaOferta.id_corrida, id_motorista: user.id });
@@ -126,17 +217,27 @@ export default function HomeScreen({ navigation, route }) {
   const fazerLogout = async () => {
     await AsyncStorage.clear();
     if(socket) socket.disconnect();
-    // Reseta a navegação e volta para o Login
+    if(locationSubscription.current) locationSubscription.current.remove(); // Para o GPS
     navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
   };
 
-  if (!usuario) return <View style={styles.center}><ActivityIndicator size="large" color="#a388ee"/></View>;
+  if (!usuario || !origem) return <View style={styles.center}><ActivityIndicator size="large" color="#a388ee"/><Text style={{marginTop:10}}>Carregando GPS...</Text></View>;
 
+  // ========================================================
+  // 7. RENDERIZAÇÃO
+  // ========================================================
   return (
     <View style={styles.container}>
       <MapView ref={mapRef} style={styles.map} initialRegion={{ ...origem, latitudeDelta: 0.05, longitudeDelta: 0.05 }}>
+        {/* Ícone dinâmico: Carro para motorista, Pessoa para passageiro */}
         <Marker coordinate={origem} title="Você" anchor={{x:0.5, y:0.5}}>
-            <Image source={{uri: 'https://cdn-icons-png.flaticon.com/512/1673/1673221.png'}} style={{width: 40, height: 40}} resizeMode="contain"/>
+            <Image 
+                source={{uri: usuario.tipo === 'motorista' 
+                    ? 'https://cdn-icons-png.flaticon.com/512/75/75780.png' // Ícone Carro
+                    : 'https://cdn-icons-png.flaticon.com/512/1673/1673221.png' // Ícone Pessoa
+                }} 
+                style={{width: 40, height: 40}} resizeMode="contain"
+            />
         </Marker>
         {destino && <Marker coordinate={destino} title="Destino" anchor={{x:0.5, y:1}}><Image source={{uri: 'https://cdn-icons-png.flaticon.com/512/149/149059.png'}} style={{width: 40, height: 40}} resizeMode="contain"/></Marker>}
         {rota.length > 0 && <Polyline coordinates={rota} strokeColor="#00ff88" strokeWidth={5} />}
@@ -145,7 +246,6 @@ export default function HomeScreen({ navigation, route }) {
       <View style={styles.header}>
           <View>
             <Text style={styles.headerText}>Olá, {usuario.nome}</Text>
-            {/* NAVEGAÇÃO NATIVA AQUI 👇 */}
             <TouchableOpacity onPress={() => navigation.navigate('History')}>
                 <Text style={{color:'#a388ee', fontWeight:'bold'}}>📜 Histórico</Text>
             </TouchableOpacity>
